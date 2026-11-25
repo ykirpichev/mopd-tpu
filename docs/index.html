@@ -201,7 +201,7 @@ pre {
 </head>
 <body>
 <nav class="nav" aria-label="Sections"><div class="nav-inner">
-<a href="#tldr">TL;DR</a><a href="#results">Results</a><a href="#headroom">Headroom</a><a href="#charts">Charts</a><a href="#dist">MOPD vs MOPD-dist</a><a href="#cost">Cost</a><a href="#teachers">Teachers</a><a href="#caveats">Caveats</a><a href="#appendix">Appendix</a>
+<a href="#tldr">TL;DR</a><a href="#what">What is MOPD</a><a href="#results">Results</a><a href="#headroom">Headroom</a><a href="#charts">Charts</a><a href="#dist">MOPD vs MOPD-dist</a><a href="#cost">Cost</a><a href="#teachers">Teachers</a><a href="#caveats">Caveats</a><a href="#references">References</a><a href="#appendix">Appendix</a>
 </div></nav>
 <main class="shell">
 
@@ -221,6 +221,11 @@ pre {
 <li><strong>The exact full-vocabulary loss (MOPD-dist) ties with sampled-token MOPD.</strong> All three differences are within ±3 pp, and it costs only about 3.5% more time per step (205 vs 198 s). The cheaper sampled form is enough at this scale.</li>
 <li><strong>Total cost about $295</strong> (pilot ≈ $78, full study ≈ $217): $244.54 on the VM ledger plus about $51 off-ledger. The four trained teachers are kept in GCS.</li>
 </ul></div>
+</section>
+
+<section id="what">
+<h2>What is MOPD</h2>
+<p>Multi-teacher on-policy distillation (MOPD) merges several specialist models into one. The student samples its own answers, and each answer is scored token by token by the teacher specialised in that prompt's domain, here a math teacher or an instruction-following teacher. The student is then pushed toward that teacher's distribution (lower reverse KL), so one model picks up every specialist's skill.</p>
 </section>
 
 <section id="results">
@@ -313,6 +318,17 @@ pre {
 <li><strong>Two seeds per arm, one run per teacher.</strong> Single-arm AIME CIs are about ±5 pp; paired differences are tighter (±1.5–3 pp) because arms share problems.</li>
 <li>The math headroom is small (T-math is +8.3 pp above base), so headroom ratios have wide CIs. Distillation arms are bounded by their teachers and plateau by step 20 on AIME.</li>
 </ul>
+</section>
+
+<section id="references">
+<h2>References</h2>
+<ul>
+<li><a href="https://arxiv.org/abs/2606.30406"><em>MOPD: Multi-Teacher On-Policy Distillation for Capability Integration in LLM Post-Training</em></a>, arXiv:2606.30406 · <a href="https://mimo.xiaomi.com/zh/paper/mopd">Xiaomi project page</a>.</li>
+<li>Xiaomi LLM-Core, <a href="https://arxiv.org/abs/2601.02780"><em>MiMo-V2-Flash Technical Report</em></a>, arXiv:2601.02780, §4.1 and §4.4 (MOPD definition and loss).</li>
+<li><a href="https://github.com/BytedTsinghua-SIA/Open-MOPD">Open-MOPD</a> (Tsinghua AIR + ByteDance Seed), open code and SmolLM3-3B checkpoints · <a href="https://arxiv.org/abs/2608.19098">arXiv:2608.19098</a>.</li>
+<li><a href="https://github.com/XiaomiMiMo/MiMo-V2-Flash">XiaomiMiMo/MiMo-V2-Flash</a>: model weights; no MOPD training code.</li>
+</ul>
+<p class="footnote">MOPD2, the later variant with teacher-prefix and SFT-prefix streams described in the <a href="https://huggingface.co/XiaomiMiMo/MiMo-V2.6-Flash-MOPD">MiMo-V2.6-Flash-MOPD</a> model card, is out of scope here.</p>
 </section>
 
 <section id="appendix">
