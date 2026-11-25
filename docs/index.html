@@ -272,7 +272,7 @@ pre {
 <ul>
 <li>MOPD scores only the sampled token: the per-token advantage is the teacher-minus-student log-prob, clipped at ±5. MOPD-dist computes the exact reverse KL to the routed teacher over all 248,320 vocabulary entries at every position.</li>
 <li>All three step-60 differences are within ±1.1 pp, with every CI inside ±3 pp. The same holds at steps 20 and 40, where all differences are within ±1 pp.</li>
-<li>Steps took 205 s against 198 s (3.6% slower), not the 20% the plan modelled. Rebuilding the teacher logits from shipped hidden states adds about 8 s of learner time per step.</li>
+<li>Steps took 205 s against 198 s (about 3.5% slower), not the 20% the plan modelled. Rebuilding the teacher logits from shipped hidden states adds about 8 s of learner time per step.</li>
 <li>Shipping the teacher's final hidden state (bf16, through <span class="mono">/dev/shm</span>) and rebuilding its logits on the learner was exact: the rebuilt logits matched the teacher's own to 0.0 at every step.</li>
 </ul>
 </section>
