@@ -1,0 +1,135 @@
+{
+ "owner": "mopd",
+ "plan": "mopdpaper",
+ "doc": "docs/mopd-paper-plan.md (recommended package R): seeds s2/s3 for MOPD, MOPD-dist, Mix-RL; OPD s2; SFT (offline distillation) x3 seeds x 120 steps; teacher merges M1-M4; reference re-evals",
+ "total_cap_usd": 250,
+ "total_cap_note": "user hard cap $320 all-in incl. off-ledger cross-region transfer (~$11-13 per boot: 120 GB cache pull + 9 GB teachers from asia-northeast1). Ledger cap = 320 - transfer so far - projected remaining transfer - margin; lowered by the supervisor as transfer is measured (internal transfer ledger)",
+ "max_vms": 2,
+ "cap": 6144,
+ "steps": 60,
+ "teacher_steps": 60,
+ "ckpt_steps": "20,40,60",
+ "teacher_ckpt_steps": "60",
+ "domains": "math:8,if:8",
+ "eval_samples": {
+  "aime": 16,
+  "if": 4
+ },
+ "learner_flags": "--gdn-chunk 256 --mb-tokens 8192",
+ "teacher_flags": "--gdn-chunk 256 --mb-tokens 8192",
+ "state_dir": "/tmp/qrl-mopdpaper/d90",
+ "max_run": "12h",
+ "slots": [
+  [
+   "qrl-bc4a-mp1-ew4a",
+   "europe-west4-a"
+  ],
+  [
+   "qrl-bc4a-mp2-ew4a",
+   "europe-west4-a"
+  ]
+ ],
+ "slot_note": "Flex-start v6e-4 in europe-west4-a only (user rule); no Spot, never on-demand without explicit user confirmation",
+ "price_usd_h": {
+  "asia-northeast1": 5.4,
+  "us-east5": 5.4,
+  "europe-west4": 5.4,
+  "us-central1": 5.4,
+  "us-south1": 5.4,
+  "southamerica-west1": 5.4,
+  "southamerica-east1": 5.4,
+  "asia-southeast1": 5.4,
+  "default": 6.48
+ },
+ "price_spot_usd_h": {
+  "us-east4": 0.98,
+  "asia-southeast1": 1.07,
+  "us-south1": 2.15,
+  "us-central1": 2.82,
+  "us-east1": 2.82,
+  "us-west1": 2.82,
+  "southamerica-west1": 4.11,
+  "asia-south1": 6.25,
+  "asia-northeast1": 6.35,
+  "us-east5": 6.48,
+  "europe-west4": 7.13,
+  "default": 8.56
+ },
+ "price_ondemand_usd_h": {
+  "us-central1": 10.8,
+  "us-east1": 10.8,
+  "us-west1": 10.8,
+  "us-east4": 10.8,
+  "us-east5": 10.8,
+  "us-south1": 10.8,
+  "southamerica-west1": 10.8,
+  "europe-west4": 11.88,
+  "asia-southeast1": 11.88,
+  "asia-northeast1": 12.96,
+  "asia-south1": 12.96,
+  "default": 12.96
+ },
+ "allowed_models": [
+  "FLEX_START"
+ ],
+ "ledger_gs": "gs://qrl-bc4a-compile-cache-tpu-builders-509006/mopdpaper/ledger",
+ "gs_prefix": "gs://qrl-bc4a-compile-cache-tpu-builders-509006/mopdpaper",
+ "items": {
+  "sft_single_s0": {
+   "deps": [],
+   "h90": 7.5,
+   "what": "SFT s0 120 steps chips 0/1 (2-step smoke first; evals 20/40/60 on chip 0 after generation); merges M1-M4 + reference re-evals on chips 2/3; step 120 on 4 chips"
+  },
+  "mopd_s2": {
+   "deps": [],
+   "h90": 4.4,
+   "what": "MOPD s2"
+  },
+  "mopd_dist_s2": {
+   "deps": [],
+   "h90": 4.5,
+   "what": "MOPD-dist s2"
+  },
+  "sft_pair_s1s2": {
+   "deps": [
+    "sft_smoke"
+   ],
+   "h90": 8.0,
+   "what": "SFT s1 chips 0/1, s2 chips 2/3, 120 steps"
+  },
+  "mopd_s3": {
+   "deps": [],
+   "h90": 4.4,
+   "what": "MOPD s3"
+  },
+  "mopd_dist_s3": {
+   "deps": [],
+   "h90": 4.5,
+   "what": "MOPD-dist s3"
+  },
+  "mixrl_pair_s2s3": {
+   "deps": [],
+   "h90": 5.4,
+   "what": "Mix-RL s2 chips 0/1, s3 chips 2/3; evals 20/40/60 on 4 chips"
+  },
+  "opd9b_s2": {
+   "deps": [],
+   "h90": 4.4,
+   "what": "OPD from T-math on every prompt, s2"
+  }
+ },
+ "pairs": {},
+ "requester": {
+  "scheduler_job": "qrl-bc4a-requester-tick",
+  "run_job": "qrl-bc4a-requester",
+  "region": "asia-northeast1"
+ },
+ "smoke": false,
+ "single_teacher": "tmath",
+ "h90_note": "docs/mopd-paper-plan.md cost anchors (mopdfull measured): MOPD 3.85/4.2, MOPD-dist 3.95/4.3, OPD 3.80/4.2, Mix-RL pair 4.9/5.4, SFT pair 7.1/8.0, SFT single+merges+refs 6.7/7.5 VM-h; h90 adds ~0.2 h margin to the distillation items",
+ "single_teacher_note": "gate 5: pilot starting KL vs the base student was 9B 0.194 and 4B 0.179 against same-origin 0.014 (14x and 13x, both > 5x), so the single-teacher baseline is T-math on every prompt (run names opd-tmath-s*)",
+ "sft_steps": 120,
+ "sft_ckpt_steps": "20,40,60,120",
+ "sft_lr": "1e-6",
+ "ref_seeds": "2234 3234"
+}
