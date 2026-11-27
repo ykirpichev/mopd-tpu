@@ -1,0 +1,205 @@
+{
+ "about": "v2 sync-vs-async plan. Pilot (phase 0) fixes cap (6144 vs 8192), learner flags and the prompt filter; the tiers reuse these args. {cap}, {model_len}, {schedule}, {learner_flags} are filled from pilot/decision.json.",
+ "common": {
+  "model": "/dev/shm/models/Qwen3.5-2B",
+  "steps": 150,
+  "rollout_args": "--prompts-per-batch 16 --group-size 8 --max-tokens {cap} --max-tokens-schedule {schedule} --max-model-len {model_len} --train-filter /results/pilot/profile.json --keep-zero-frac 0.2 --temperature 1.0",
+  "learner_args": "--max-model-len {model_len} --grad-ckpt --lr 1e-6 --ckpt-every 25 {learner_flags} --log-entropy",
+  "eval": {
+   "eval_set": "v2",
+   "steps_mid": [
+    50,
+    100
+   ],
+   "samples_mid": 16,
+   "step_final": 150,
+   "samples_final": 32,
+   "max_tokens": "{cap}",
+   "temperature": 0.6,
+   "top_p": 0.95
+  }
+ },
+ "pilot": {
+  "vm": 1,
+  "chips_0_2": "qrl.profile_prompts: 919 train prompts x 8 samples, cap 8192, T=1.0 (3 shards) -> profile.json",
+  "chip_3": [
+   "qrl.profile_prompts --timing-probe (decode s/step at 32/64/128/256 seqs)",
+   "tpu/bench_learner.py sweep: gdn-chunk 64/256 x mb-tokens 0/16384/32768, then compile + contig-grad"
+  ],
+  "then_all_chips": "base-model eval v2, 32 samples, cap 8192 (step-0 reference for every run)",
+  "decision_rules": {
+   "cap": "8192 if survival(8192) <= 0.45 or truncated_loop_frac < 0.5; else 6144 (more length cannot fix loops)",
+   "schedule": "0:4096,30:{cap}",
+   "learner_flags": "fastest bench config whose fwd+bwd completes; default --gdn-chunk 256 --mb-tokens 16384",
+   "filter": "keep 1..7/8 prompts + 20% of 0/8; abort and report if fewer than 150 prompts survive",
+   "budget_gate": "re-run plan/cost_model.py with measured rollout/learner/eval speeds; stop and report if the approved tier's new P50 exceeds 85% of its hard cap"
+  }
+ },
+ "tiers": {
+  "a": {
+   "runs": [
+    {
+     "name": "sync-s{seed}",
+     "mode": "sync",
+     "seeds": [
+      0,
+      1,
+      2
+     ],
+     "chips": "0/1"
+    },
+    {
+     "name": "async-k2-s{seed}",
+     "mode": "async",
+     "staleness": 2,
+     "staleness_mode": "bounded",
+     "seeds": [
+      0,
+      1,
+      2
+     ],
+     "chips": "2/3"
+    }
+   ],
+   "packing": "3 VMs in parallel, VM i = sync-s_i (chips 0/1) + async-k2-s_i (chips 2/3); freed chips evaluate"
+  },
+  "b": {
+   "adds": [
+    {
+     "name": "fixed-k{k}-s{seed}",
+     "mode": "async",
+     "staleness_mode": "fixed",
+     "k": [
+      1,
+      2,
+      4
+     ],
+     "seeds": [
+      0,
+      1
+     ]
+    }
+   ],
+   "packing": "+3 VMs, two fixed-lag runs per VM",
+   "why_fixed_lag": "with rollout as the bottleneck, bounded staleness sits at ~1 for any k >= 1, so a bounded k sweep would measure nothing; fixed lag forces exactly k"
+  },
+  "c": {
+   "adds": [
+    {
+     "name": "split21-sync-s{seed}",
+     "mode": "sync",
+     "rollout_chips": "0,1",
+     "learner_chip": 2,
+     "seeds": [
+      0,
+      1
+     ]
+    },
+    {
+     "name": "split21-async-k2-s{seed}",
+     "mode": "async",
+     "staleness": 2,
+     "rollout_chips": "0,1",
+     "learner_chip": 2,
+     "seeds": [
+      0,
+      1
+     ]
+    }
+   ],
+   "packing": "+2 VMs, one 2:1 run at a time on chips 0-2, chip 3 evaluates"
+  }
+ },
+ "ablation_no_is": {
+  "question": "are sampler behavior log-probs and the IS correction needed? Trainer recomputes the old policy on the sampler's tokens; PPO clip only; sampler log-probs logged for diagnostics only",
+  "flag": "--learner-args '... --behavior-logprobs none'  (default 'use' = truncated IS, cap 2)",
+  "updates_per_batch": "1 (matches the IS arms; ratio == 1 so the clip never binds and the loss is plain on-policy PG on stale samples). --updates-per-batch 2 is a separate, unpriced variant that makes the clip active",
+  "options": {
+   "abl_k2": {
+    "runs": [
+     {
+      "name": "noIS-k2-s{seed}",
+      "mode": "async",
+      "staleness": 2,
+      "staleness_mode": "bounded",
+      "behavior_logprobs": "none",
+      "seeds": [
+       0,
+       1,
+       2
+      ]
+     }
+    ],
+    "compare_to": [
+     "async-k2-s{0,1,2}",
+     "sync-s{0,1,2}"
+    ],
+    "packing": "+2 VMs: (noIS-k2-s0, noIS-k2-s1) and (noIS-k2-s2 on chips 0/1, chips 2/3 evaluate)"
+   },
+   "abl_k4_standalone": {
+    "runs": [
+     {
+      "name": "noIS-fixed-k4-s{seed}",
+      "mode": "async",
+      "staleness": 4,
+      "staleness_mode": "fixed",
+      "behavior_logprobs": "none",
+      "seeds": [
+       0,
+       1,
+       2
+      ]
+     },
+     {
+      "name": "fixed-k4-s{seed}",
+      "mode": "async",
+      "staleness": 4,
+      "staleness_mode": "fixed",
+      "seeds": [
+       0,
+       1,
+       2
+      ]
+     }
+    ],
+    "when": "tier a only (b not chosen)",
+    "packing": "+3 VMs, VM i = (noIS-fixed-k4-s_i, fixed-k4-s_i)"
+   },
+   "abl_k4_in_b": {
+    "runs": [
+     {
+      "name": "noIS-fixed-k4-s{seed}",
+      "mode": "async",
+      "staleness": 4,
+      "staleness_mode": "fixed",
+      "behavior_logprobs": "none",
+      "seeds": [
+       0,
+       1,
+       2
+      ]
+     },
+     {
+      "name": "fixed-k4-s2",
+      "mode": "async",
+      "staleness": 4,
+      "staleness_mode": "fixed",
+      "seeds": [
+       2
+      ]
+     }
+    ],
+    "when": "tier b or c (b already has fixed-k4-s{0,1})",
+    "packing": "+2 VMs, two runs per VM"
+   }
+  },
+  "seeds": "matched: noIS-*-s_i uses the IS arm's seed s_i (same prompt order and sampling seeds at step 0)",
+  "metrics": [
+   "pass@1 v2 at steps 50/100/150 (hierarchical bootstrap, paired problems; TOST +-3 pp)",
+   "train reward curve (seed-level band)",
+   "kl_behav_cur (k3, sampler vs trainer on sampled tokens), behav_ratio_mean/max, behav_would_truncate_frac",
+   "grad_norm / grad_norms, entropy, clip_frac",
+   "s/step, tokens/s"
+  ]
+ }
+}
