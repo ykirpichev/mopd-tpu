@@ -1,0 +1,22 @@
+mopd-tpu
+Copyright 2026 Yury Kirpichev
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product includes software developed by third parties, also under the
+Apache License, Version 2.0:
+
+- rl/qrl/ifv/if_functions.py: from allenai/open-instruct
+  (https://github.com/allenai/open-instruct), open_instruct/if_functions.py.
+  Copyright Allen Institute for AI.
+- rl/qrl/ifv/ifeval/: from google-research/google-research
+  (https://github.com/google-research/google-research), instruction_following_eval.
+  Copyright The Google Research Authors.
+- rl/qrl/ifv/ifbench/: from allenai/IFBench (https://github.com/allenai/IFBench),
+  ifbench/. Copyright Allen Institute for AI.
+
+Changes to these files are listed in rl/qrl/ifv/NOTICE.md.
+
+The code trains and evaluates fine-tunes of Qwen/Qwen3.5-2B
+(https://huggingface.co/Qwen/Qwen3.5-2B), Copyright Alibaba Cloud, licensed under
+the Apache License, Version 2.0. No Qwen weights are included in this repository.
