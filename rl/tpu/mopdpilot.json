@@ -1,0 +1,133 @@
+{
+ "owner": "mopd",
+ "plan": "mopdpilot",
+ "doc": "docs/mopd-tpu-plan.md (Pilot): teachers 30 steps (stored and held), probe + Mix-RL s0, MOPD s0, MOPD-dist s0, 30 steps each, final evals only",
+ "total_cap_usd": 75,
+ "total_cap_note": "user hard cap $90 of new spend; $15 kept for what the VM ledger does not price: the 33 GB compile cache pulled from asia-northeast1 by every VM boot (4 boots so far incl. the 13:48 UTC Flex preemption + automatic restart of both VMs, ~$2.6 each at $0.08/GB), teacher upload + downloads (~45 GB), cache write-back, Cloud Run and Scheduler",
+ "max_vms": 2,
+ "cap": 6144,
+ "steps": 30,
+ "teacher_steps": 30,
+ "ckpt_steps": "30",
+ "teacher_ckpt_steps": "30",
+ "domains": "math:8,if:8",
+ "eval_samples": {
+  "aime": 16,
+  "if": 4
+ },
+ "learner_flags": "--gdn-chunk 256 --mb-tokens 8192",
+ "teacher_flags": "--gdn-chunk 256 --mb-tokens 8192",
+ "state_dir": "/tmp/qrl-mopd/d90",
+ "max_run": "12h",
+ "slots": [
+  [
+   "qrl-bc4a-mp1-ew4a",
+   "europe-west4-a"
+  ],
+  [
+   "qrl-bc4a-mp2-ew4a",
+   "europe-west4-a"
+  ],
+  [
+   "qrl-bc4a-mp1-ew4b",
+   "europe-west4-b"
+  ],
+  [
+   "qrl-bc4a-mp2-ew4b",
+   "europe-west4-b"
+  ],
+  [
+   "qrl-bc4a-ms-ue4a",
+   "us-east4-a",
+   "SPOT"
+  ],
+  [
+   "qrl-bc4a-ms-ue4b",
+   "us-east4-b",
+   "SPOT"
+  ],
+  [
+   "qrl-bc4a-ms-ase1b",
+   "asia-southeast1-b",
+   "SPOT"
+  ]
+ ],
+ "slot_note": "Flex-start in europe-west4 (user decision); Spot only in the three zones whose Spot list price is far below Flex, used only if granted; on-demand never",
+ "price_usd_h": {
+  "asia-northeast1": 5.4,
+  "us-east5": 5.4,
+  "europe-west4": 5.4,
+  "us-central1": 5.4,
+  "us-south1": 5.4,
+  "southamerica-west1": 5.4,
+  "southamerica-east1": 5.4,
+  "asia-southeast1": 5.4,
+  "default": 6.48
+ },
+ "price_spot_usd_h": {
+  "us-east4": 0.98,
+  "asia-southeast1": 1.07,
+  "us-south1": 2.15,
+  "us-central1": 2.82,
+  "us-east1": 2.82,
+  "us-west1": 2.82,
+  "southamerica-west1": 4.11,
+  "asia-south1": 6.25,
+  "asia-northeast1": 6.35,
+  "us-east5": 6.48,
+  "europe-west4": 7.13,
+  "default": 8.56
+ },
+ "price_ondemand_usd_h": {
+  "us-central1": 10.8,
+  "us-east1": 10.8,
+  "us-west1": 10.8,
+  "us-east4": 10.8,
+  "us-east5": 10.8,
+  "us-south1": 10.8,
+  "southamerica-west1": 10.8,
+  "europe-west4": 11.88,
+  "asia-southeast1": 11.88,
+  "asia-northeast1": 12.96,
+  "asia-south1": 12.96,
+  "default": 12.96
+ },
+ "allowed_models": [
+  "FLEX_START",
+  "SPOT"
+ ],
+ "ledger_gs": "gs://qrl-bc4a-compile-cache-tpu-builders-509006/mopdpilot/ledger",
+ "gs_prefix": "gs://qrl-bc4a-compile-cache-tpu-builders-509006/mopdpilot",
+ "items": {
+  "teachers": {
+   "deps": [],
+   "h90": 3.4,
+   "what": "T-math (math:16) chips 0/1 and T-IF (if:16) chips 2/3, 30 steps; bring-up smoke on 2/3; evals; export+upload+hold"
+  },
+  "probe_mixrl": {
+   "deps": [],
+   "h90": 2.6,
+   "what": "Mix-RL s0 chips 0/1; 2B/4B/9B probe (starting KL, prefill tok/s, 9B AIME x4) chips 2/3; base IF evals"
+  },
+  "mopd_s0": {
+   "deps": [
+    "teachers"
+   ],
+   "h90": 2.9,
+   "what": "MOPD sampled-token, s0, 30 steps; gate-6 round trip on chip 3"
+  },
+  "mopd_dist_s0": {
+   "deps": [
+    "teachers"
+   ],
+   "h90": 3.3,
+   "what": "MOPD-dist full-vocabulary reverse KL from shipped hidden states, s0, 30 steps"
+  }
+ },
+ "pairs": {},
+ "requester": {
+  "scheduler_job": "qrl-bc4a-requester-tick",
+  "run_job": "qrl-bc4a-requester",
+  "region": "asia-northeast1"
+ }
+}
