@@ -1,0 +1,157 @@
+{
+ "owner": "mopd",
+ "plan": "plan65k1long",
+ "total_cap_usd": 65,
+ "max_vms": 2,
+ "cap": 6144,
+ "steps": 60,
+ "reprice_median_max_usd": 80,
+ "state_dir": "/tmp/qrl-long/d90",
+ "max_run": "12h",
+ "slots": [
+  [
+   "qrl-bc4a-r1-s0",
+   "asia-northeast1-b"
+  ],
+  [
+   "qrl-bc4a-r2-s0",
+   "asia-northeast1-b"
+  ],
+  [
+   "qrl-bc4a-x1-ue5a",
+   "us-east5-a"
+  ],
+  [
+   "qrl-bc4a-x2-ew4a",
+   "europe-west4-a"
+  ],
+  [
+   "qrl-bc4a-z-us1ai1b",
+   "us-south1-ai1b"
+  ],
+  [
+   "qrl-bc4a-z-sw1a",
+   "southamerica-west1-a"
+  ],
+  [
+   "qrl-bc4a-z-ase1b",
+   "asia-southeast1-b"
+  ],
+  [
+   "qrl-bc4a-z-se1c",
+   "southamerica-east1-c"
+  ],
+  [
+   "qrl-bc4a-z-ew4b",
+   "europe-west4-b"
+  ],
+  [
+   "qrl-bc4a-z-ue5b",
+   "us-east5-b"
+  ],
+  [
+   "qrl-bc4a-z-ue5c",
+   "us-east5-c"
+  ],
+  [
+   "qrl-bc4a-z-uc1a",
+   "us-central1-a"
+  ],
+  [
+   "qrl-bc4a-z-uc1b",
+   "us-central1-b"
+  ],
+  [
+   "qrl-bc4a-z-uc1c",
+   "us-central1-c"
+  ],
+  [
+   "qrl-bc4a-z-as1b",
+   "asia-south1-b"
+  ],
+  [
+   "qrl-bc4a-z-as1c",
+   "asia-south1-c"
+  ],
+  [
+   "qrl-bc4a-z-ae1c",
+   "asia-east1-c"
+  ],
+  [
+   "qrl-bc4a-z-ue1b",
+   "us-east1-b"
+  ],
+  [
+   "qrl-bc4a-z-ue1d",
+   "us-east1-d"
+  ],
+  [
+   "qrl-bc4a-z-ue4a",
+   "us-east4-a"
+  ],
+  [
+   "qrl-bc4a-z-ue4b",
+   "us-east4-b"
+  ],
+  [
+   "qrl-bc4a-z-uw1c",
+   "us-west1-c"
+  ]
+ ],
+ "price_usd_h": {
+  "asia-northeast1": 5.4,
+  "us-east5": 5.4,
+  "europe-west4": 5.4,
+  "us-central1": 5.4,
+  "us-south1": 5.4,
+  "southamerica-west1": 5.4,
+  "southamerica-east1": 5.4,
+  "asia-southeast1": 5.4,
+  "default": 6.48
+ },
+ "ledger_gs": "gs://qrl-bc4a-compile-cache-tpu-builders-509006/plan65k1long/ledger",
+ "pairs": {
+  "pA": "lk1is-s0 async fixed 1 use 0|lk1nois-s0 async fixed 1 none 0",
+  "pB": "lk1is-s1 async fixed 1 use 1|lk1nois-s1 async fixed 1 none 1"
+ },
+ "requester": {
+  "scheduler_job": "qrl-bc4a-requester-tick",
+  "run_job": "qrl-bc4a-requester",
+  "region": "asia-northeast1"
+ },
+ "price_spot_usd_h": {
+  "us-east4": 0.98,
+  "asia-southeast1": 1.07,
+  "us-south1": 2.15,
+  "us-central1": 2.82,
+  "us-east1": 2.82,
+  "us-west1": 2.82,
+  "southamerica-west1": 4.11,
+  "asia-south1": 6.25,
+  "asia-northeast1": 6.35,
+  "us-east5": 6.48,
+  "europe-west4": 7.13,
+  "default": 8.56
+ },
+ "price_ondemand_usd_h": {
+  "us-central1": 10.8,
+  "us-east1": 10.8,
+  "us-west1": 10.8,
+  "us-east4": 10.8,
+  "us-east5": 10.8,
+  "us-south1": 10.8,
+  "southamerica-west1": 10.8,
+  "europe-west4": 11.88,
+  "asia-southeast1": 11.88,
+  "asia-northeast1": 12.96,
+  "asia-south1": 12.96,
+  "default": 12.96
+ },
+ "allowed_models": [
+  "FLEX_START"
+ ],
+ "gs_prefix": "gs://qrl-bc4a-compile-cache-tpu-builders-509006/plan65k1long",
+ "pair_gate_h90": 5.25,
+ "pair_gate_note": "P90 VM hours per 60-step k=1 pair with evals at 20/40/60 split per run (plan/cost_long.py: P10/50/90 4.63/4.90/5.20 h; anchored on plan25k1)",
+ "slot_note": "Flex-start only: pairs do not resume, so a Spot preemption late in a 60-step pair would cost the pair; Spot and on-demand are not allowed"
+}
