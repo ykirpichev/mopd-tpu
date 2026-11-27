@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Multi-teacher on-policy distillation (MOPD) on TPU v6e</title>
-<meta name="description" content="Multi-teacher on-policy distillation of a math teacher and an instruction-following teacher into one Qwen3.5-2B student, on Google TPU v6e with TorchTPU + vLLM. MOPD reaches both teachers; GRPO on the mixed data does not."/>
+<title>When is on-policy distillation worth it? MOPD on TPU v6e</title>
+<meta name="description" content="Multi-teacher on-policy distillation (MOPD) of a math and an instruction-following teacher into one Qwen3.5-2B student on TPU v6e, with 4 seeds. MOPD reaches both teachers and routing is essential, but offline distillation and a task-arithmetic merge match it at a fraction of the compute."/>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet"/>
@@ -197,88 +197,182 @@ pre {
   font-size: 0.95rem;
 }
 .figure img { cursor: zoom-in; }
+.linkrow { display: flex; flex-wrap: wrap; gap: 0.6rem; margin: 1.1rem 0 0; }
+.pill {
+  display: inline-block;
+  padding: 0.35rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  font-size: 0.92rem;
+  font-weight: 500;
+  text-decoration: none;
+}
+.pill-muted { color: var(--muted); }
+.callout ul ul { margin: 0.3rem 0 0; }
+.callout ul ul li { margin: 0.3rem 0; }
 </style>
 </head>
 <body>
 <nav class="nav" aria-label="Sections"><div class="nav-inner">
-<a href="#tldr">TL;DR</a><a href="#what">What is MOPD</a><a href="#results">Results</a><a href="#headroom">Headroom</a><a href="#charts">Charts</a><a href="#dist">MOPD vs MOPD-dist</a><a href="#cost">Cost</a><a href="#teachers">Teachers</a><a href="#caveats">Caveats</a><a href="#references">References</a><a href="#appendix">Appendix</a>
+<a href="#tldr">TL;DR</a><a href="#what">What is MOPD</a><a href="#results">Results</a><a href="#contrasts">Contrasts</a><a href="#compute">Compute</a><a href="#why">Why</a><a href="#headroom">Headroom</a><a href="#dist">MOPD vs MOPD-dist</a><a href="#cost">Cost</a><a href="#teachers">Teachers</a><a href="#caveats">Caveats</a><a href="#references">References</a><a href="#appendix">Appendix</a>
 </div></nav>
 <main class="shell">
 
 <header>
 <p class="eyebrow">TPU Builders study</p>
-<h1 class="brand">Multi-teacher on-policy distillation on TPU v6e</h1>
-<p class="lede">We distilled a math teacher and an instruction-following (IF) teacher into one Qwen3.5-2B student with multi-teacher on-policy distillation (MOPD), on Google TPU v6e-4 with TorchTPU + vLLM.</p>
+<h1 class="brand">When is on-policy distillation worth it?</h1>
+<p class="lede">We distilled a math teacher and an instruction-following (IF) teacher into one Qwen3.5-2B student with multi-teacher on-policy distillation (MOPD). We compared it against joint RL, offline distillation and weight merging. Everything ran on Google TPU v6e-4 with TorchTPU + vLLM.</p>
+<p class="linkrow"><span class="pill pill-muted">Paper: arXiv link coming</span><a class="pill" href="https://github.com/ykirpichev/mopd-tpu/tree/main/rl">Code (Apache-2.0) →</a></p>
 <p class="crosslink">Same machines, recipe and AIME eval as the companion study: <a href="https://ykirpichev.github.io/async-vs-sync-rl-tpu/">Async vs sync RL on TPU v6e →</a></p>
 </header>
 
 <section id="tldr">
 <h2>TL;DR</h2>
 <div class="callout"><ul>
-<li><strong>MOPD merges both specialists into one 2B student; Mix-RL does not.</strong> At step 60, MOPD matches the math teacher on AIME (−0.4 pp, 95% CI −2.1 to +1.2) and is within 1.5 pp of the IF teacher on IFEval and IFBench. Mix-RL (GRPO on the same mixed prompts) trails the teachers by 3.8, 3.0 and 4.9 pp, all significant.</li>
-<li><strong>MOPD beats Mix-RL at the same number of samples on all three benchmarks</strong>: AIME +3.4 pp [+0.7, +6.5], IFEval +1.5 pp [−1.0, +4.2], IFBench +3.4 pp [+0.5, +6.6]. It closes 95%, 78% and 76% of the base-to-teacher gap; Mix-RL closes 54%, 56% and 22%. MOPD at step 20 already beats Mix-RL at step 60 on AIME (+3.1 pp [+1.3, +5.1]).</li>
-<li><strong>Routing is what buys the IF gains.</strong> Distilling from T-math alone on every prompt matches MOPD on math, but MOPD is +5.5 pp better on IFEval and +5.6 pp better on IFBench.</li>
-<li><strong>The exact full-vocabulary loss (MOPD-dist) ties with sampled-token MOPD.</strong> All three differences are within ±3 pp, and it costs only about 3.5% more time per step (205 vs 198 s). The cheaper sampled form is enough at this scale.</li>
-<li><strong>Total cost about $295</strong> (pilot ≈ $78, full study ≈ $217): $244.54 on the VM ledger plus about $51 off-ledger. The four trained teachers are kept in GCS.</li>
+<li><strong>Routing is the robust effect.</strong> Distilling from the math teacher alone on every prompt learns nothing on IF. MOPD, which sends each prompt to its own domain's teacher, is +6.0 pp better on IFEval and +6.1 pp on IFBench (Holm-corrected p &lt; 0.001 for both).</li>
+<li><strong>MOPD reaches both teachers.</strong> It is equivalent (within ±3 pp) to the math teacher on AIME and to the IF teacher on IFEval and IFBench.</li>
+<li><strong>Two cheaper baselines match MOPD.</strong>
+<ul>
+<li>Offline distillation (SFT on the same teachers' samples) is equivalent to MOPD on all three benchmarks, at matched learner tokens and at matched VM-hours. It needs half the accelerator time per run.</li>
+<li>A task-arithmetic merge of the two teachers, with no training at all, is equivalent on AIME and IFEval and 2.0 pp higher on IFBench (not significant).</li>
+</ul></li>
+<li><strong>MOPD's lead over joint RL (Mix-RL) is smaller than the 2-seed run showed.</strong> With 4 seeds, only IFBench survives correction: +3.5 pp. On AIME the gap is +2.4 pp but not significant after Holm, and IFEval is a tie.</li>
+<li><strong>Why the cheap baselines hold up here:</strong> the teachers sit very close to the student. The starting per-token KL is about 0.02 nats, and only about 15% of the teachers' weight updates are nonzero in bf16.</li>
+<li><strong>Total cost about $596</strong> over 88 VM-hours: the pilot, the main study and the paper extension.</li>
 </ul></div>
+<p class="takeaway"><strong>Updated for the paper.</strong> An earlier version of this page reported 2 seeds and no offline or merge baselines. Its headline (MOPD clearly beats Mix-RL) did not hold up with 4 seeds and the added baselines.</p>
 </section>
 
 <section id="what">
 <h2>What is MOPD</h2>
-<p>Multi-teacher on-policy distillation (MOPD) merges several specialist models into one. The student samples its own answers, and each answer is scored token by token by the teacher specialised in that prompt's domain, here a math teacher or an instruction-following teacher. The student is then pushed toward that teacher's distribution (lower reverse KL), so one model picks up every specialist's skill.</p>
+<p>Multi-teacher on-policy distillation (MOPD) merges several specialist models into one. The student samples its own answers, and each answer is scored token by token by the teacher for that prompt's domain, here a math teacher or an IF teacher. The student is then pushed toward that teacher's distribution (lower reverse KL), so one model picks up every specialist's skill.</p>
+<p>The cheaper alternatives are offline distillation, which trains on the teachers' own samples, and weight merging, which adds the teachers' weight changes together with no training.</p>
 </section>
 
 <section id="results">
 <h2>Results at a glance</h2>
-<p>Step-60 scores. Each trained arm pools 2 seeds; teachers and the base model are single runs. AIME is pass@1 on 136 problems × 16 samples. IFEval is strict prompt accuracy on 541 prompts × 4 samples, and IFBench strict accuracy on 300 prompts × 4 samples. Brackets are 95% CIs from a hierarchical bootstrap over problems, seeds and samples (10,000 draws).</p>
+<p>Step-60 scores with 95% CIs:</p>
+<ul>
+<li>MOPD, MOPD-dist and Mix-RL pool 4 seeds; OPD and SFT pool 3; merges are single evaluations.</li>
+<li>AIME is pass@1 on 136 problems × 16 samples, IFEval strict prompt accuracy on 541 × 4 and IFBench strict accuracy on 300 × 4.</li>
+<li>The CIs come from a hierarchical bootstrap over problems, seeds and samples (10,000 draws).</li>
+</ul>
 <div class="table-wrap"><table class="nowrap">
-<thead><tr><th>Model</th><th>AIME pass@1</th><th>IFEval strict</th><th>IFBench strict</th></tr></thead>
+<thead><tr><th>Model</th><th>Runs</th><th>AIME pass@1</th><th>IFEval strict</th><th>IFBench strict</th></tr></thead>
 <tbody>
-<tr><td>Base Qwen3.5-2B</td><td>9.47% <span class="ci">[6.2, 13.1]</span></td><td>67.4% <span class="ci">[64.0, 70.8]</span></td><td>26.2% <span class="ci">[22.0, 30.4]</span></td></tr>
-<tr><td>T-math teacher (GRPO, math)</td><td>17.78% <span class="ci">[13.0, 22.9]</span></td><td>66.4% <span class="ci">[62.8, 69.8]</span></td><td>24.8% <span class="ci">[20.5, 29.1]</span></td></tr>
-<tr><td>T-IF teacher (GRPO, IF)</td><td>10.57% <span class="ci">[7.0, 14.6]</span></td><td>74.3% <span class="ci">[71.1, 77.5]</span></td><td>32.5% <span class="ci">[27.8, 37.3]</span></td></tr>
-<tr><td>Mix-RL (GRPO, math + IF)</td><td>13.95% <span class="ci">[9.8, 18.6]</span></td><td>71.3% <span class="ci">[68.0, 74.5]</span></td><td>27.6% <span class="ci">[23.0, 32.2]</span></td></tr>
-<tr class="hl"><td><strong>MOPD</strong> (sampled token)</td><td>17.35% <span class="ci">[12.4, 22.5]</span></td><td>72.8% <span class="ci">[69.5, 76.1]</span></td><td>31.0% <span class="ci">[26.4, 35.7]</span></td></tr>
-<tr class="hl"><td><strong>MOPD-dist</strong> (exact, full vocab)</td><td>18.45% <span class="ci">[13.4, 23.8]</span></td><td>71.9% <span class="ci">[68.6, 75.1]</span></td><td>31.8% <span class="ci">[27.3, 36.4]</span></td></tr>
-<tr><td>OPD from T-math only</td><td>18.22% <span class="ci">[13.4, 23.4]</span></td><td>67.4% <span class="ci">[64.0, 70.6]</span></td><td>25.4% <span class="ci">[21.2, 29.7]</span></td></tr>
+<tr><td>Base Qwen3.5-2B</td><td>3 / 2 / 2 evals</td><td>9.42% <span class="ci">[6.2, 12.9]</span></td><td>68.3% <span class="ci">[65.0, 71.6]</span></td><td>25.8% <span class="ci">[21.5, 30.2]</span></td></tr>
+<tr><td>T-math teacher</td><td>3 / 1 / 1 evals</td><td>18.05% <span class="ci">[13.2, 23.1]</span></td><td>66.4% <span class="ci">[62.9, 69.8]</span></td><td>24.8% <span class="ci">[20.5, 29.2]</span></td></tr>
+<tr><td>T-IF teacher</td><td>1 / 3 / 3 evals</td><td>10.57% <span class="ci">[7.0, 14.4]</span></td><td>74.3% <span class="ci">[71.2, 77.3]</span></td><td>31.5% <span class="ci">[26.9, 36.1]</span></td></tr>
+<tr class="hl"><td><strong>MOPD</strong></td><td>4 seeds</td><td>17.51% <span class="ci">[12.8, 22.4]</span></td><td>73.0% <span class="ci">[70.0, 76.1]</span></td><td>31.2% <span class="ci">[26.6, 35.9]</span></td></tr>
+<tr><td>MOPD-dist (exact, full vocab)</td><td>4 seeds</td><td>17.90% <span class="ci">[13.1, 23.0]</span></td><td>72.8% <span class="ci">[69.6, 76.1]</span></td><td>31.9% <span class="ci">[27.5, 36.5]</span></td></tr>
+<tr class="hl"><td><strong>SFT on teacher samples</strong>, step 60</td><td>3 seeds</td><td>17.63% <span class="ci">[12.9, 22.6]</span></td><td>72.5% <span class="ci">[69.4, 75.7]</span></td><td>31.1% <span class="ci">[26.5, 35.6]</span></td></tr>
+<tr><td>SFT on teacher samples, step 120</td><td>3 seeds</td><td>17.65% <span class="ci">[12.9, 22.7]</span></td><td>72.8% <span class="ci">[69.5, 76.1]</span></td><td>31.6% <span class="ci">[27.1, 36.2]</span></td></tr>
+<tr class="hl"><td><strong>M2 task-arithmetic merge</strong></td><td>1 eval</td><td>18.70% <span class="ci">[13.7, 24.0]</span></td><td>73.6% <span class="ci">[70.3, 76.8]</span></td><td>33.3% <span class="ci">[28.4, 38.2]</span></td></tr>
+<tr><td>M3 TIES merge, 20% density</td><td>1 eval</td><td>17.56% <span class="ci">[12.7, 22.7]</span></td><td>72.8% <span class="ci">[69.5, 76.1]</span></td><td>31.9% <span class="ci">[27.3, 36.7]</span></td></tr>
+<tr><td>M4 TIES merge, 50% density</td><td>1 eval</td><td>17.97% <span class="ci">[13.0, 23.1]</span></td><td>72.9% <span class="ci">[69.5, 76.1]</span></td><td>30.8% <span class="ci">[26.2, 35.7]</span></td></tr>
+<tr><td>M1 linear average</td><td>1 eval</td><td>15.81% <span class="ci">[11.2, 20.7]</span></td><td>71.0% <span class="ci">[67.7, 74.4]</span></td><td>29.8% <span class="ci">[25.2, 34.5]</span></td></tr>
+<tr><td>Mix-RL (GRPO, math + IF)</td><td>4 seeds</td><td>15.14% <span class="ci">[10.8, 19.8]</span></td><td>72.2% <span class="ci">[69.1, 75.4]</span></td><td>27.7% <span class="ci">[23.4, 32.1]</span></td></tr>
+<tr><td>OPD from T-math only</td><td>3 seeds</td><td>17.77% <span class="ci">[12.9, 22.8]</span></td><td>67.1% <span class="ci">[63.7, 70.4]</span></td><td>25.2% <span class="ci">[20.9, 29.5]</span></td></tr>
 </tbody></table></div>
-<p class="footnote">Base IFEval and IFBench pool two evals of the same base model (8 samples per prompt). Teachers are the stored 60-step teachers.</p>
+<figure class="figure"><a href="charts/paper/paper_t1_evals.png"><img src="charts/paper/paper_t1_evals.png" alt="Step-60 AIME pass@1, IFEval and IFBench for every arm, teacher and merge, with 95% CIs" loading="lazy"/></a><figcaption class="caption">Step-60 scores per arm and benchmark, with 95% CIs. MOPD, SFT and the TIES and task-arithmetic merges land at the same level; Mix-RL trails on AIME and IFBench, and OPD from T-math alone stays at base on IF.</figcaption></figure>
+</section>
+
+<section id="contrasts">
+<h2>The comparisons that matter</h2>
+<p>Paired differences at step 60, in pp. The CIs are paired by problem, and Holm correction covers the 7 primary contrasts per benchmark.</p>
+<ul>
+<li><strong>Bold:</strong> significant after Holm.</li>
+<li><strong>≈:</strong> equivalent within ±3 pp (TOST, 90% CI in braces).</li>
+</ul>
+<div class="table-wrap"><table class="nowrap">
+<thead><tr><th>Contrast</th><th>AIME</th><th>IFEval</th><th>IFBench</th></tr></thead>
+<tbody>
+<tr><td>MOPD − OPD (T-math only): routing</td><td>−0.26 <span class="ci">{−1.48, +0.97}</span> ≈</td><td><strong>+5.95 <span class="ci">[+3.69, +8.23]</span></strong></td><td><strong>+6.06 <span class="ci">[+3.04, +9.15]</span></strong></td></tr>
+<tr><td>MOPD − routed teacher</td><td>−0.54 <span class="ci">{−1.69, +0.64}</span> ≈</td><td>−1.23 <span class="ci">{−2.58, +0.09}</span> ≈</td><td>−0.24 <span class="ci">{−2.20, +1.77}</span> ≈</td></tr>
+<tr><td>MOPD − SFT@60 (tokens matched)</td><td>−0.12 <span class="ci">{−1.31, +1.15}</span> ≈</td><td>+0.49 <span class="ci">{−0.92, +1.91}</span> ≈</td><td>+0.15 <span class="ci">{−1.80, +2.12}</span> ≈</td></tr>
+<tr><td>MOPD − SFT@120 (VM-h matched)</td><td>−0.14 <span class="ci">{−1.29, +1.06}</span> ≈</td><td>+0.25 <span class="ci">{−1.20, +1.68}</span> ≈</td><td>−0.38 <span class="ci">{−1.97, +1.26}</span> ≈</td></tr>
+<tr><td>MOPD − M2 task arithmetic</td><td>−1.19 <span class="ci">{−2.65, +0.28}</span> ≈</td><td>−0.55 <span class="ci">{−2.22, +1.10}</span> ≈</td><td>−2.02 <span class="ci">[−4.77, +0.75]</span></td></tr>
+<tr><td>MOPD − M3 TIES 20%</td><td>−0.05 <span class="ci">{−1.46, +1.44}</span> ≈</td><td>+0.23 <span class="ci">{−1.39, +1.93}</span> ≈</td><td>−0.69 <span class="ci">{−3.00, +1.62}</span></td></tr>
+<tr><td>MOPD − Mix-RL</td><td>+2.37 <span class="ci">[+0.29, +4.77]</span></td><td>+0.79 <span class="ci">{−1.07, +2.74}</span> ≈</td><td><strong>+3.54 <span class="ci">[+0.94, +6.33]</span></strong></td></tr>
+<tr><td>MOPD-dist − MOPD</td><td>+0.39 <span class="ci">{−0.76, +1.55}</span> ≈</td><td>−0.17 <span class="ci">{−1.61, +1.22}</span> ≈</td><td>+0.69 <span class="ci">{−0.77, +2.17}</span> ≈</td></tr>
+</tbody></table></div>
+<ul>
+<li><strong>Mix-RL on AIME.</strong> The gap has p = 0.024 uncorrected but a Holm-adjusted p of 0.17.</li>
+<li><strong>Why the Mix-RL gap shrank.</strong> The two extra Mix-RL seeds scored 16.2% and 16.5% on AIME, against 12.7% and 15.2% for the first two. Mix-RL is the most seed-sensitive arm: its per-seed AIME SD is 1.7 pp, against 0.4 pp for MOPD.</li>
+<li><strong>Task-arithmetic merge on IFBench.</strong> M2 is 2.0 pp higher there, which is neither significant nor equivalent.</li>
+</ul>
+<figure class="figure"><a href="charts/paper/paper_f4_paired_diffs.png"><img src="charts/paper/paper_f4_paired_diffs.png" alt="Forest plot of step-60 paired differences, primary and secondary contrasts, with the ±3 pp equivalence band" loading="lazy"/></a><figcaption class="caption">Step-60 paired differences with 95% CIs; the green band is the ±3 pp equivalence margin. Most contrasts among MOPD, SFT and the merges sit inside the band; routing on IF and several contrasts against Mix-RL or the base model sit outside it.</figcaption></figure>
+</section>
+
+<section id="compute">
+<h2>Accuracy per unit of compute</h2>
+<p class="takeaway"><strong>At equal accuracy, the merges cost nothing and SFT needs about half of MOPD's VM-hours.</strong></p>
+<div class="table-wrap"><table class="nowrap">
+<thead><tr><th>Arm (per seed, to step 60)</th><th>Chips</th><th>s/step</th><th>Learner tokens</th><th>VM-h</th><th>$</th></tr></thead>
+<tbody>
+<tr><td>Merges M1–M4</td><td>CPU</td><td>–</td><td>0</td><td>≈ 0 (seconds)</td><td>≈ 0</td></tr>
+<tr><td>Mix-RL</td><td>2</td><td>115</td><td>11.0 M</td><td>1.06</td><td>5.74</td></tr>
+<tr><td>SFT on teacher samples, step 60</td><td>2</td><td>179</td><td>20.2 M</td><td>1.59</td><td>8.59</td></tr>
+<tr><td>SFT on teacher samples, step 120</td><td>2</td><td>179</td><td>40.3 M</td><td>3.07</td><td>16.59</td></tr>
+<tr class="hl"><td><strong>MOPD</strong></td><td>4</td><td>183</td><td>20.4 M</td><td>3.34</td><td>18.03</td></tr>
+<tr><td>MOPD-dist</td><td>4</td><td>193</td><td>20.5 M</td><td>3.50</td><td>18.89</td></tr>
+<tr><td>OPD (T-math only)</td><td>4</td><td>183</td><td>20.7 M</td><td>3.30</td><td>17.84</td></tr>
+</tbody></table></div>
+<p class="footnote">VM-h is learner wall time times the share of the v6e-4 the run used, and $ is VM-h × $5.40 (the Flex list price). s/step is the median. Teacher training is shared by every arm except Mix-RL and is not included.</p>
+<figure class="figure"><a href="charts/paper/paper_f3_accuracy_vs_vmh.png"><img src="charts/paper/paper_f3_accuracy_vs_vmh.png" alt="Step-60 accuracy against training VM-hours per seed for every arm; merges at about zero" loading="lazy"/></a><figcaption class="caption">Step-60 accuracy against training VM-hours per seed. The merges sit at about 0 VM-h at MOPD's level; SFT reaches it at about half the VM-hours.</figcaption></figure>
+<figure class="figure"><a href="charts/paper/paper_f2_by_step.png"><img src="charts/paper/paper_f2_by_step.png" alt="AIME, IFEval and IFBench by training step, seeds pooled with 95% CI bands; SFT runs to step 120" loading="lazy"/></a><figcaption class="caption">Evals by step, seeds pooled, with 95% CI bands. Every distillation arm reaches about teacher level by step 20 on AIME and then stays flat. Mix-RL is still climbing at step 60 (12.0 → 12.9 → 15.1%). SFT runs to step 120.</figcaption></figure>
+</section>
+
+<section id="why">
+<h2>Why the cheap baselines work here</h2>
+<ul>
+<li><strong>The teachers are close to the student.</strong> The per-token reverse KL from student to routed teacher averages about 0.02 nats over the first 5 steps. SFT's forward KL on the teachers' samples falls from 0.018 to 0.0015 by step 60. So the teachers' samples are ones the student could almost have produced, which leaves little exposure bias for on-policy training to fix.</li>
+<li><strong>The teachers are weak.</strong> T-math is only 8.6 pp above base on AIME; T-IF is 6.0 pp (IFEval) and 5.7 pp (IFBench) above base. Any method that transfers most of a small gap ends up within ±3 pp of the others.</li>
+<li><strong>The weight updates are tiny and sparse.</strong> Only about 14.6% of the teachers' weight-change entries are nonzero after bf16 rounding. Two such updates barely overlap, so adding them (task arithmetic) causes little interference, and TIES trimming has almost nothing left to trim.</li>
+<li><strong>The advantage clip never binds.</strong> At ±5 it touches about 1.3e-5 of MOPD tokens.</li>
+</ul>
+<h3>When on-policy distillation should win</h3>
+<p>We expect the ranking to change with:</p>
+<ul>
+<li>more distant teachers or weaker students;</li>
+<li>much longer teacher training, which makes the weight updates dense and overlapping;</li>
+<li>teachers 20+ pp above base;</li>
+<li>more domains;</li>
+<li>long thinking-mode outputs.</li>
+</ul>
+<p>The paper proposes a test for each. Until those are run, for same-origin, short-horizon specialists: try task arithmetic first (it is free), then offline distillation, and reserve on-policy distillation for when both fall short.</p>
 </section>
 
 <section id="headroom">
 <h2>Share of the teacher gap closed</h2>
-<p>How much of the base-to-teacher gap each arm closes at step 60, with 95% CIs. The teacher is T-math for AIME and T-IF for IFEval and IFBench. 100% means at teacher level.</p>
+<p>How much of the base-to-teacher gap each arm closes at step 60, with 95% CIs. The teacher is T-math for AIME and T-IF for IFEval and IFBench; 100% means teacher level.</p>
 <div class="table-wrap"><table class="nowrap">
-<thead><tr><th>Arm</th><th>AIME (gap +8.3 pp)</th><th>IFEval (gap +6.9 pp)</th><th>IFBench (gap +6.3 pp)</th></tr></thead>
+<thead><tr><th>Arm</th><th>AIME (gap +8.6 pp)</th><th>IFEval (gap +6.0 pp)</th><th>IFBench (gap +5.7 pp)</th></tr></thead>
 <tbody>
-<tr><td>Mix-RL</td><td>54% <span class="ci">[21, 82]</span></td><td>56% <span class="ci">[24, 91]</span></td><td>22% <span class="ci">[−31, 66]</span></td></tr>
-<tr class="hl"><td><strong>MOPD</strong></td><td>95% <span class="ci">[75, 118]</span></td><td>78% <span class="ci">[48, 112]</span></td><td>76% <span class="ci">[40, 127]</span></td></tr>
-<tr><td>MOPD-dist</td><td>108% <span class="ci">[87, 135]</span></td><td>65% <span class="ci">[32, 96]</span></td><td>89% <span class="ci">[53, 146]</span></td></tr>
-<tr><td>OPD (T-math only)</td><td>105% <span class="ci">[86, 130]</span></td><td>−1% <span class="ci">[−45, 28]</span></td><td>−13% <span class="ci">[−69, 19]</span></td></tr>
+<tr class="hl"><td><strong>MOPD</strong></td><td>94% <span class="ci">[79, 112]</span></td><td>79% <span class="ci">[52, 107]</span></td><td>96% <span class="ci">[58, 155]</span></td></tr>
+<tr><td>MOPD-dist</td><td>98% <span class="ci">[81, 118]</span></td><td>76% <span class="ci">[44, 108]</span></td><td>108% <span class="ci">[74, 174]</span></td></tr>
+<tr><td>SFT, step 60</td><td>95% <span class="ci">[79, 114]</span></td><td>71% <span class="ci">[42, 98]</span></td><td>93% <span class="ci">[57, 149]</span></td></tr>
+<tr><td>SFT, step 120</td><td>95% <span class="ci">[79, 114]</span></td><td>75% <span class="ci">[42, 107]</span></td><td>102% <span class="ci">[68, 167]</span></td></tr>
+<tr><td>M2 task arithmetic</td><td>108% <span class="ci">[87, 131]</span></td><td>89% <span class="ci">[57, 122]</span></td><td>131% <span class="ci">[89, 214]</span></td></tr>
+<tr><td>M3 TIES 20%</td><td>94% <span class="ci">[75, 117]</span></td><td>75% <span class="ci">[43, 108]</span></td><td>108% <span class="ci">[66, 178]</span></td></tr>
+<tr><td>M4 TIES 50%</td><td>99% <span class="ci">[79, 124]</span></td><td>77% <span class="ci">[44, 110]</span></td><td>89% <span class="ci">[48, 149]</span></td></tr>
+<tr><td>M1 linear average</td><td>74% <span class="ci">[55, 95]</span></td><td>46% <span class="ci">[7, 79]</span></td><td>71% <span class="ci">[25, 126]</span></td></tr>
+<tr><td>Mix-RL</td><td>66% <span class="ci">[43, 89]</span></td><td>66% <span class="ci">[33, 105]</span></td><td>33% <span class="ci">[−11, 73]</span></td></tr>
+<tr><td>OPD (T-math only)</td><td>97% <span class="ci">[79, 116]</span></td><td>−21% <span class="ci">[−71, 10]</span></td><td>−11% <span class="ci">[−67, 21]</span></td></tr>
 </tbody></table></div>
-<p class="footnote">T-math alone closes the math gap but none of the IF gaps; MOPD routes each prompt to its domain's teacher and closes both.</p>
-</section>
-
-<section id="charts">
-<h2>Key charts</h2>
-<figure class="figure"><img src="charts/mopd_evals_by_step.png" alt="AIME pass@1, IFEval and IFBench at steps 0, 20, 40 and 60 for every arm, seeds pooled with 95% CIs" loading="lazy"/><figcaption class="caption">AIME pass@1, IFEval and IFBench at steps 0, 20, 40 and 60, seeds pooled with 95% CIs. Dashed lines: the T-math teacher (AIME) and the T-IF teacher (IFEval, IFBench).</figcaption></figure>
-<figure class="figure"><img src="charts/mopd_paired_diffs.png" alt="Paired differences at step 60 with 95% CIs" loading="lazy"/><figcaption class="caption">Paired differences at step 60 with 95% CIs: MOPD and MOPD-dist vs Mix-RL, MOPD vs OPD from T-math only, and MOPD-dist vs MOPD.</figcaption></figure>
-<figure class="figure"><img src="charts/mopd_headroom.png" alt="Share of the base-to-teacher gap closed at step 60 per arm and benchmark" loading="lazy"/><figcaption class="caption">Share of the base-to-teacher gap closed at step 60, per arm and benchmark, with 95% CIs.</figcaption></figure>
-<figure class="figure"><img src="charts/mopd_kl_entropy.png" alt="Reverse KL to the routed teacher and policy entropy per step" loading="lazy"/><figcaption class="caption">Reverse KL to the routed teacher (all, math and IF prompts) and policy entropy per step for every distillation and Mix-RL run. KL falls about 30×; entropy drifts up slightly (see caveats).</figcaption></figure>
+<p class="footnote">The gaps are small, so the ratios have wide CIs. The linear average halves each teacher's weight change, which is why it closes less.</p>
+<figure class="figure"><a href="charts/paper/paper_f5_headroom.png"><img src="charts/paper/paper_f5_headroom.png" alt="Share of the base-to-teacher gap closed at step 60 per arm and benchmark, with 95% CIs" loading="lazy"/></a><figcaption class="caption">Share of the base-to-teacher gap closed at step 60, per arm and benchmark, with 95% CIs.</figcaption></figure>
 </section>
 
 <section id="dist">
 <h2>MOPD vs MOPD-dist</h2>
-<p class="takeaway"><strong>A tie within ±3 pp, for only about 3.5% more step time.</strong> Use the sampled-token form at this scale.</p>
-<div class="table-wrap"><table class="nowrap">
-<thead><tr><th>MOPD-dist − MOPD, step 60</th><th>AIME</th><th>IFEval</th><th>IFBench</th></tr></thead>
-<tbody><tr><td>Difference, pp [95% CI]</td><td>+1.10 <span class="ci">[−0.57, +2.92]</span></td><td>−0.90 <span class="ci">[−2.98, +1.11]</span></td><td>+0.79 <span class="ci">[−1.12, +2.67]</span></td></tr></tbody>
-</table></div>
+<p class="takeaway"><strong>Equivalent within ±3 pp on all three benchmarks, for about 3.5% more step time.</strong> The cheaper sampled-token form is enough at this scale.</p>
 <ul>
-<li>MOPD scores only the sampled token: the per-token advantage is the teacher-minus-student log-prob, clipped at ±5. MOPD-dist computes the exact reverse KL to the routed teacher over all 248,320 vocabulary entries at every position.</li>
-<li>All three step-60 differences are within ±1.1 pp, with every CI inside ±3 pp. The same holds at steps 20 and 40, where all differences are within ±1 pp.</li>
-<li>Steps took 205 s against 198 s (about 3.5% slower), not the 20% the plan modelled. Rebuilding the teacher logits from shipped hidden states adds about 8 s of learner time per step.</li>
-<li>Shipping the teacher's final hidden state (bf16, through <span class="mono">/dev/shm</span>) and rebuilding its logits on the learner was exact: the rebuilt logits matched the teacher's own to 0.0 at every step.</li>
+<li><strong>The two losses.</strong> MOPD scores only the sampled token: the per-token advantage is the teacher-minus-student log-prob, clipped at ±5. MOPD-dist computes the exact reverse KL to the routed teacher over all 248,320 vocabulary entries at every position.</li>
+<li><strong>Accuracy.</strong> With 4 seeds, MOPD-dist − MOPD is +0.39, −0.17 and +0.69 pp on AIME, IFEval and IFBench, and all three 90% CIs lie inside ±2.2 pp.</li>
+<li><strong>Speed.</strong> Steps took 205 s against 198 s on a mean basis (about 3.5% slower), not the 20% the plan modelled.</li>
+<li><strong>How the exact loss stays cheap.</strong> The teacher ships its final hidden state (bf16, through <span class="mono">/dev/shm</span>) and the learner rebuilds its logits. The rebuilt logits matched the teacher's own to 0.0 at every step.</li>
 </ul>
 </section>
 
@@ -286,37 +380,46 @@ pre {
 <h2>Cost</h2>
 <p>All runs used Flex v6e-4 in europe-west4-a at $5.40/h. Spot was never granted, and on-demand was never requested.</p>
 <div class="table-wrap"><table class="nowrap">
-<thead><tr><th>Budget</th><th>VM-hours</th><th>Ledger</th><th>Off-ledger (est.)</th><th>Total</th><th>Cap</th></tr></thead>
+<thead><tr><th>Phase</th><th>VM-hours</th><th>Ledger</th><th>Off-ledger (est.)</th><th>Total</th></tr></thead>
 <tbody>
-<tr><td>Pilot (30 steps)</td><td>11.1</td><td>$60.06</td><td>≈ $18</td><td>≈ $78</td><td>$90</td></tr>
-<tr><td>Full study (60 steps × 2 seeds)</td><td>34.2</td><td>$184.48</td><td>≈ $33</td><td>≈ $217</td><td>$255</td></tr>
-<tr class="hl"><td><strong>Total</strong></td><td>45.3</td><td>$244.54</td><td>≈ $51</td><td><strong>≈ $295</strong></td><td>$345</td></tr>
+<tr><td>Pilot (30 steps, 1 seed, gates)</td><td>11.1</td><td>$60.06</td><td>≈ $18</td><td>≈ $78</td></tr>
+<tr><td>Main study (2 seeds, teachers)</td><td>34.2</td><td>$184.48</td><td>≈ $33</td><td>≈ $217</td></tr>
+<tr><td>Paper extension (2 more seeds, SFT, merges, re-evals)</td><td>42.8</td><td>$231.11</td><td>≈ $69</td><td>≈ $301</td></tr>
+<tr class="hl"><td><strong>Total</strong></td><td>88.1</td><td>$475.65</td><td>≈ $120</td><td><strong>≈ $596</strong></td></tr>
 </tbody></table></div>
-<p class="footnote">The ledger counts VM time at the Flex list price, per boot. Off-ledger is mostly cross-region GCS transfer (estimated at $0.08/GB): the compile cache lives in asia-northeast1 and every fresh VM in europe-west4 pulled it, plus teacher uploads and downloads. Only GCS storage still bills: <span class="mono">cache/</span> at 120 GB and <span class="mono">teachers/</span> at 18.3 GB, about $3.2/month.</p>
+<p class="footnote">The ledger counts VM time at the Flex list price. Off-ledger cost is cross-region GCS transfer (estimated at $0.08/GB): the bucket is in asia-northeast1 and the VMs ran in europe-west4. Most of it is compile-cache pulls, which grew from 33 GB to 208 GB over the program.</p>
 </section>
 
 <section id="teachers">
 <h2>The stored teachers</h2>
-<p>All four teachers are kept under <span class="mono">gs://qrl-bc4a-compile-cache-tpu-builders-509006/teachers/qwen3.5-2b/</span>. Each directory holds a loadable Hugging Face model (bf16 safetensors, config, tokenizer), <span class="mono">teacher.json</span> with scores and recipe, <span class="mono">SHA256SUMS</span> and a <span class="mono">COMPLETE</span> marker. Every object has a GCS temporary hold.</p>
+<p>All four teachers are kept under <span class="mono">gs://qrl-bc4a-compile-cache-tpu-builders-509006/teachers/qwen3.5-2b/</span>, with a GCS temporary hold on every object. Each directory holds:</p>
+<ul>
+<li>a loadable Hugging Face model (bf16 safetensors, config, tokenizer);</li>
+<li><span class="mono">teacher.json</span> with scores and recipe;</li>
+<li><span class="mono">SHA256SUMS</span> and a <span class="mono">COMPLETE</span> marker.</li>
+</ul>
+<p>A public Hugging Face release under Apache-2.0 is planned.</p>
 <div class="table-wrap"><table class="nowrap">
 <thead><tr><th>Teacher</th><th>Directory</th><th>AIME</th><th>IFEval</th><th>IFBench</th></tr></thead>
 <tbody>
-<tr><td>T-math, 60 steps (used)</td><td class="mono">math-grpo-k1is-60steps-s0-20261124-9dfe9c2/</td><td>17.8%</td><td>66.4%</td><td>24.8%</td></tr>
-<tr><td>T-IF, 60 steps (used)</td><td class="mono">if-grpo-k1is-60steps-s0-20261124-9dfe9c2/</td><td>10.6%</td><td>74.3%</td><td>32.5%</td></tr>
+<tr><td>T-math, 60 steps (used)</td><td class="mono">math-grpo-k1is-60steps-s0-20261124-9dfe9c2/</td><td>18.05%</td><td>66.4%</td><td>24.8%</td></tr>
+<tr><td>T-IF, 60 steps (used)</td><td class="mono">if-grpo-k1is-60steps-s0-20261124-9dfe9c2/</td><td>10.57%</td><td>74.3%</td><td>31.5%</td></tr>
 <tr><td>T-math, 30 steps (pilot)</td><td class="mono">math-grpo-k1is-30steps-s0-20261124-d909884/</td><td>15.7%</td><td>66.7%</td><td>27.9%</td></tr>
 <tr><td>T-IF, 30 steps (pilot)</td><td class="mono">if-grpo-k1is-30steps-s0-20261124-d909884/</td><td>9.5%</td><td>71.3%</td><td>28.1%</td></tr>
 </tbody></table></div>
-<p class="footnote">To remove a teacher later, first release its holds (<span class="mono">gcloud storage objects update --no-temporary-hold</span>).</p>
+<p class="footnote">The 60-step in-domain scores pool 3 eval repeats (T-math AIME; T-IF IFEval and IFBench); the other cells are single evals.</p>
 </section>
 
 <section id="caveats">
 <h2>Caveats</h2>
 <ul>
-<li><strong>The 9B baseline was swapped for "T-math for all".</strong> In the pilot, Qwen3.5-9B started at a reverse KL of 0.194 to our student against 0.0144 for the same-origin teachers (13.4×), over the plan's gate-5 limit of 5× (the 4B was 12×). The full study therefore ran OPD from T-math on every prompt instead, so "a bigger, distant teacher hurts" is untested here.</li>
-<li><strong>Policy entropy drifts upward</strong> in every distillation arm: from about 0.46 (first 5 steps) to 0.51–0.53 (last 5), and 0.54–0.57 at step 60, mostly on math prompts. Mix-RL goes the other way (0.40 → 0.35). Gate 4 only requires entropy to stay above half its start, so this is a drift, not a failure, but longer runs should watch it.</li>
-<li><strong>The IF-prompt KL fell less in seed 1.</strong> MOPD went 0.038 → 0.0033 (12×) in s0 but 0.024 → 0.0058 (4×) in s1; MOPD-dist 6× vs 3×. MOPD s1's IF KL also ticked up to 0.0074 at step 60. It rests on 8 IF prompts per step and does not show in the evals: MOPD s1 has the best IFEval of any student run (73.3%).</li>
-<li><strong>Two seeds per arm, one run per teacher.</strong> Single-arm AIME CIs are about ±5 pp; paired differences are tighter (±1.5–3 pp) because arms share problems.</li>
-<li>The math headroom is small (T-math is +8.3 pp above base), so headroom ratios have wide CIs. Distillation arms are bounded by their teachers and plateau by step 20 on AIME.</li>
+<li><strong>Small scale.</strong> One 2B student, two domains, and two teachers, each trained once with one seed. Teacher-seed variance is untested.</li>
+<li><strong>Weak teachers limit power.</strong> The teacher gaps are +5.7 to +8.6 pp, so the ±3 pp margin is 35–53% of the gap.</li>
+<li><strong>Merges have no seed level.</strong> Each merge is a single evaluation, so its CI covers problem and sample noise only.</li>
+<li><strong>The distant-teacher arm is untested.</strong> In the pilot, Qwen3.5-9B started at 13.4× the same-origin KL, over the gate limit, so the study ran OPD from T-math only instead.</li>
+<li><strong>Pure distillation.</strong> MOPD here has no outcome-reward term, which MiMo adds by default. Evals are non-thinking, with answers capped at 6,144 tokens.</li>
+<li><strong>Two analyses disagree on some small effects.</strong> A Bayesian mixed GLM, which treats samples as independent and has no seed level, calls the AIME gap to Mix-RL significant and puts MOPD slightly below the teachers. The bootstrap does not. Both are reported in the paper.</li>
+<li><strong>Policy entropy drifts upward</strong> in every distillation arm, from about 0.46 to about 0.52 over 60 steps, mostly on math prompts. It never fails the gate.</li>
 </ul>
 </section>
 
@@ -326,6 +429,8 @@ pre {
 <li><a href="https://arxiv.org/abs/2606.30406"><em>MOPD: Multi-Teacher On-Policy Distillation for Capability Integration in LLM Post-Training</em></a>, arXiv:2606.30406 · <a href="https://mimo.xiaomi.com/zh/paper/mopd">Xiaomi project page</a>.</li>
 <li>Xiaomi LLM-Core, <a href="https://arxiv.org/abs/2601.02780"><em>MiMo-V2-Flash Technical Report</em></a>, arXiv:2601.02780, §4.1 and §4.4 (MOPD definition and loss).</li>
 <li><a href="https://github.com/BytedTsinghua-SIA/Open-MOPD">Open-MOPD</a> (Tsinghua AIR + ByteDance Seed), open code and SmolLM3-3B checkpoints · <a href="https://arxiv.org/abs/2608.19098">arXiv:2608.19098</a>.</li>
+<li>Kim &amp; Rush, <a href="https://arxiv.org/abs/1606.07947"><em>Sequence-Level Knowledge Distillation</em></a>, arXiv:1606.07947 (the offline baseline).</li>
+<li>Ilharco et al., <a href="https://arxiv.org/abs/2212.04089"><em>Editing Models with Task Arithmetic</em></a>, arXiv:2212.04089 · Yadav et al., <a href="https://arxiv.org/abs/2306.01708"><em>TIES-Merging</em></a>, arXiv:2306.01708.</li>
 <li><a href="https://github.com/XiaomiMiMo/MiMo-V2-Flash">XiaomiMiMo/MiMo-V2-Flash</a>: model weights; no MOPD training code.</li>
 </ul>
 <p class="footnote">MOPD2, the later variant with teacher-prefix and SFT-prefix streams described in the <a href="https://huggingface.co/XiaomiMiMo/MiMo-V2.6-Flash-MOPD">MiMo-V2.6-Flash-MOPD</a> model card, is out of scope here.</p>
@@ -335,96 +440,25 @@ pre {
 <h2>Appendix</h2>
 
 <details>
-<summary>Per-seed numbers</summary>
-<p>Step-60 scores per seed. Base IFEval was evaluated twice (68.2% and 66.7%; IFBench 26.0% and 26.3%) and pooled to 67.4% and 26.2%. Base AIME is 9.47%.</p>
-<div class="table-wrap"><table class="nowrap">
-<thead><tr><th>Arm</th><th>Seed</th><th>AIME</th><th>IFEval</th><th>IFBench</th></tr></thead>
-<tbody>
-<tr><td>Mix-RL</td><td>s0</td><td>12.68%</td><td>71.9%</td><td>28.7%</td></tr>
-<tr><td>Mix-RL</td><td>s1</td><td>15.21%</td><td>70.7%</td><td>26.5%</td></tr>
-<tr><td>MOPD</td><td>s0</td><td>17.10%</td><td>72.3%</td><td>30.8%</td></tr>
-<tr><td>MOPD</td><td>s1</td><td>17.60%</td><td>73.3%</td><td>31.2%</td></tr>
-<tr><td>MOPD-dist</td><td>s0</td><td>18.89%</td><td>72.4%</td><td>31.7%</td></tr>
-<tr><td>MOPD-dist</td><td>s1</td><td>18.01%</td><td>71.4%</td><td>31.9%</td></tr>
-<tr><td>OPD (T-math only)</td><td>s0</td><td>18.34%</td><td>67.0%</td><td>25.1%</td></tr>
-<tr><td>OPD (T-math only)</td><td>s1</td><td>18.11%</td><td>67.7%</td><td>25.7%</td></tr>
-</tbody></table></div>
-<p>Seeds-pooled means at steps 20 / 40 / 60:</p>
-<div class="table-wrap"><table class="nowrap">
-<thead><tr><th>Arm</th><th>AIME %</th><th>IFEval %</th><th>IFBench %</th></tr></thead>
-<tbody>
-<tr><td>Mix-RL</td><td>11.53 / 12.82 / 13.95</td><td>68.1 / 70.0 / 71.3</td><td>25.6 / 26.3 / 27.6</td></tr>
-<tr><td>MOPD</td><td>17.07 / 17.72 / 17.35</td><td>71.8 / 73.2 / 72.8</td><td>29.7 / 32.0 / 31.0</td></tr>
-<tr><td>MOPD-dist</td><td>17.62 / 17.56 / 18.45</td><td>71.5 / 72.2 / 71.9</td><td>29.6 / 32.1 / 31.8</td></tr>
-<tr><td>OPD (T-math only)</td><td>17.37 / 17.03 / 18.22</td><td>66.1 / 66.6 / 67.4</td><td>25.1 / 24.9 / 25.4</td></tr>
-</tbody></table></div>
-</details>
-
-<details>
-<summary>Paired differences (steps 20, 40, 60)</summary>
-<p>Percentage points with 95% CIs, paired by problem. <strong>Bold</strong>: CI excludes zero.</p>
-<h3>Step 60</h3>
-<div class="table-wrap"><table class="nowrap">
-<thead><tr><th>Comparison</th><th>AIME</th><th>IFEval</th><th>IFBench</th></tr></thead>
-<tbody>
-<tr><td>MOPD − Mix-RL</td><td><strong>+3.40 <span class="ci">[+0.74, +6.46]</span></strong></td><td>+1.50 <span class="ci">[−1.04, +4.18]</span></td><td><strong>+3.42 <span class="ci">[+0.50, +6.62]</span></strong></td></tr>
-<tr><td>MOPD-dist − Mix-RL</td><td><strong>+4.50 <span class="ci">[+1.79, +7.79]</span></strong></td><td>+0.60 <span class="ci">[−1.96, +3.21]</span></td><td><strong>+4.21 <span class="ci">[+1.29, +7.42]</span></strong></td></tr>
-<tr><td>MOPD − OPD (T-math only)</td><td>−0.87 <span class="ci">[−2.64, +0.80]</span></td><td><strong>+5.45 <span class="ci">[+2.91, +8.09]</span></strong></td><td><strong>+5.63 <span class="ci">[+2.50, +8.83]</span></strong></td></tr>
-<tr><td>MOPD-dist − MOPD</td><td>+1.10 <span class="ci">[−0.57, +2.92]</span></td><td>−0.90 <span class="ci">[−2.98, +1.11]</span></td><td>+0.79 <span class="ci">[−1.12, +2.67]</span></td></tr>
-<tr><td>OPD (T-math only) − Mix-RL</td><td><strong>+4.27 <span class="ci">[+1.70, +7.38]</span></strong></td><td><strong>−3.95 <span class="ci">[−6.26, −1.69]</span></strong></td><td>−2.21 <span class="ci">[−5.08, +0.54]</span></td></tr>
-</tbody></table></div>
-<h3>Step 40</h3>
-<div class="table-wrap"><table class="nowrap">
-<thead><tr><th>Comparison</th><th>AIME</th><th>IFEval</th><th>IFBench</th></tr></thead>
-<tbody>
-<tr><td>MOPD − Mix-RL</td><td><strong>+4.89 <span class="ci">[+2.57, +7.40]</span></strong></td><td><strong>+3.14 <span class="ci">[+0.55, +5.89]</span></strong></td><td><strong>+5.63 <span class="ci">[+2.67, +8.75]</span></strong></td></tr>
-<tr><td>MOPD-dist − Mix-RL</td><td><strong>+4.73 <span class="ci">[+2.53, +7.17]</span></strong></td><td>+2.17 <span class="ci">[−0.51, +5.06]</span></td><td><strong>+5.79 <span class="ci">[+2.71, +9.08]</span></strong></td></tr>
-<tr><td>MOPD − OPD (T-math only)</td><td>+0.69 <span class="ci">[−0.97, +2.41]</span></td><td><strong>+6.61 <span class="ci">[+4.18, +9.10]</span></strong></td><td><strong>+7.08 <span class="ci">[+4.17, +10.12]</span></strong></td></tr>
-<tr><td>MOPD-dist − MOPD</td><td>−0.16 <span class="ci">[−1.77, +1.42]</span></td><td>−0.97 <span class="ci">[−2.89, +0.97]</span></td><td>+0.17 <span class="ci">[−2.08, +2.46]</span></td></tr>
-<tr><td>OPD (T-math only) − Mix-RL</td><td><strong>+4.20 <span class="ci">[+1.91, +6.59]</span></strong></td><td><strong>−3.47 <span class="ci">[−5.85, −1.02]</span></strong></td><td>−1.46 <span class="ci">[−4.13, +1.25]</span></td></tr>
-</tbody></table></div>
-<h3>Step 20</h3>
-<div class="table-wrap"><table class="nowrap">
-<thead><tr><th>Comparison</th><th>AIME</th><th>IFEval</th><th>IFBench</th></tr></thead>
-<tbody>
-<tr><td>MOPD − Mix-RL</td><td><strong>+5.54 <span class="ci">[+3.17, +8.04]</span></strong></td><td><strong>+3.67 <span class="ci">[+1.06, +6.28]</span></strong></td><td><strong>+4.08 <span class="ci">[+1.12, +7.21]</span></strong></td></tr>
-<tr><td>MOPD-dist − Mix-RL</td><td><strong>+6.09 <span class="ci">[+3.84, +8.52]</span></strong></td><td><strong>+3.37 <span class="ci">[+0.81, +5.94]</span></strong></td><td><strong>+3.96 <span class="ci">[+1.21, +6.87]</span></strong></td></tr>
-<tr><td>MOPD − OPD (T-math only)</td><td>−0.30 <span class="ci">[−2.16, +1.56]</span></td><td><strong>+5.64 <span class="ci">[+3.14, +8.13]</span></strong></td><td><strong>+4.58 <span class="ci">[+1.62, +7.67]</span></strong></td></tr>
-<tr><td>MOPD-dist − MOPD</td><td>+0.55 <span class="ci">[−1.08, +2.25]</span></td><td>−0.30 <span class="ci">[−2.43, +1.80]</span></td><td>−0.12 <span class="ci">[−2.67, +2.42]</span></td></tr>
-<tr><td>OPD (T-math only) − Mix-RL</td><td><strong>+5.84 <span class="ci">[+3.40, +8.52]</span></strong></td><td>−1.96 <span class="ci">[−4.39, +0.51]</span></td><td>−0.50 <span class="ci">[−3.04, +1.96]</span></td></tr>
-</tbody></table></div>
-<p>Arm minus teacher at step 60 (seeds pooled, simpler bootstrap over problems and samples): MOPD −0.44 [−2.09, +1.19] on AIME vs T-math, −1.50 [−3.51, +0.51] on IFEval and −1.50 [−4.04, +1.04] on IFBench vs T-IF. Mix-RL: <strong>−3.84 [−6.04, −1.72]</strong>, <strong>−3.00 [−5.43, −0.62]</strong>, <strong>−4.92 [−8.04, −1.83]</strong>.</p>
-</details>
-
-<details>
-<summary>Speed and training dynamics</summary>
-<div class="table-wrap"><table class="nowrap">
-<thead><tr><th>Run</th><th>s/step</th><th>Wall h</th><th>Learner idle</th><th>Generator idle</th><th>Train tokens</th></tr></thead>
-<tbody>
-<tr><td>T-math teacher</td><td>180.8</td><td>3.01</td><td>5.7%</td><td>15.5%</td><td>20.1 M</td></tr>
-<tr><td>T-IF teacher</td><td>55.9</td><td>0.93</td><td>29.7%</td><td>16.4%</td><td>1.2 M</td></tr>
-<tr><td>Mix-RL s0</td><td>118.9</td><td>1.98</td><td>10.3%</td><td>14.1%</td><td>10.7 M</td></tr>
-<tr><td>Mix-RL s1</td><td>128.6</td><td>2.14</td><td>10.8%</td><td>13.7%</td><td>11.6 M</td></tr>
-<tr><td>MOPD s0</td><td>197.1</td><td>3.29</td><td>3.5%</td><td>46.1%</td><td>20.6 M</td></tr>
-<tr><td>MOPD s1</td><td>199.5</td><td>3.33</td><td>3.6%</td><td>46.7%</td><td>20.4 M</td></tr>
-<tr><td>MOPD-dist s0</td><td>205.0</td><td>3.42</td><td>3.1%</td><td>48.5%</td><td>20.4 M</td></tr>
-<tr><td>MOPD-dist s1</td><td>205.8</td><td>3.43</td><td>3.2%</td><td>48.2%</td><td>20.5 M</td></tr>
-<tr><td>OPD (T-math only) s0</td><td>194.3</td><td>3.24</td><td>2.8%</td><td>44.7%</td><td>20.6 M</td></tr>
-<tr><td>OPD (T-math only) s1</td><td>196.2</td><td>3.27</td><td>2.9%</td><td>44.9%</td><td>20.8 M</td></tr>
-</tbody></table></div>
+<summary>Per-seed scores and seed spread</summary>
+<figure class="figure"><a href="charts/paper/paper_f7_per_seed.png"><img src="charts/paper/paper_f7_per_seed.png" alt="Per-seed step-60 scores for every seeded arm" loading="lazy"/></a><figcaption class="caption">Per-seed step-60 scores for every seeded arm.</figcaption></figure>
+<p>Per-seed SD of step-60 scores, in pp (AIME / IFEval / IFBench):</p>
 <ul>
-<li>Distillation trains every sampled sequence (about 20.5 M tokens per run), so the learner is the bottleneck: about 3% learner idle vs 46% generator idle. Mix-RL trains only groups with reward variance, so its steps are shorter (about 124 s).</li>
-<li>Teacher scoring runs on its own chip while the learner trains the previous batch, and the learner never waited for it after step 0.</li>
-<li>The full study ran 8 of 8 work items with no failure, retry or preemption, across 4 Flex VM boots. The pilot was preempted once and redid its runs.</li>
+<li>Mix-RL: 1.7 / 1.3 / 1.1.</li>
+<li>MOPD: 0.4 / 0.5 / 1.2.</li>
+<li>SFT: 0.4 / 0.4 / 0.1.</li>
 </ul>
-<div class="table-wrap"><table class="nowrap">
-<thead><tr><th>Run</th><th>Reverse KL, first 5 → last 5 steps</th><th>IF-prompt KL</th><th>Entropy</th></tr></thead>
-<tbody>
-<tr><td>MOPD s0</td><td>0.0201 → 0.0007</td><td>0.0382 → 0.0033 (12×)</td><td>0.47 → 0.53 (0.56 at step 60)</td></tr>
-<tr><td>MOPD s1</td><td>0.0196 → 0.0006</td><td>0.0237 → 0.0058 (4×)</td><td>0.45 → 0.51 (0.57 at step 60)</td></tr>
-<tr><td>MOPD-dist s0</td><td>0.0185 → 0.0010</td><td>0.0348 → 0.0057 (6×)</td><td>0.47 → 0.53 (0.55 at step 60)</td></tr>
-<tr><td>MOPD-dist s1</td><td>0.0172 → 0.0010</td><td>0.0221 → 0.0079 (3×)</td><td>0.45 → 0.52 (0.57 at step 60)</td></tr>
-</tbody></table></div>
+<p>Both distillation forms are more reproducible than RL, but this does not separate on-policy from offline.</p>
+</details>
+
+<details>
+<summary>Training dynamics (main study, seeds s0–s1)</summary>
+<figure class="figure"><a href="charts/mopd_kl_entropy.png"><img src="charts/mopd_kl_entropy.png" alt="Reverse KL to the routed teacher and policy entropy per step" loading="lazy"/></a><figcaption class="caption">Reverse KL to the routed teacher (all, math and IF prompts) and policy entropy per step, for the distillation and Mix-RL runs of the main study.</figcaption></figure>
+<ul>
+<li>Reverse KL falls about 30× over 60 steps.</li>
+<li>Single-teacher OPD carries almost no signal on the other domain: T-math's KL on IF prompts is about 0.002, against 0.022–0.038 for T-IF.</li>
+<li>Distillation trains every sampled sequence (about 20.5 M tokens per run), so the learner is the bottleneck: about 3% learner idle against about 46% generator idle.</li>
+</ul>
 </details>
 
 <details>
@@ -446,26 +480,45 @@ pre {
 <details>
 <summary>Method</summary>
 <ul>
-<li><strong>Student and data.</strong> Qwen3.5-2B. Each step samples 8 math prompts (AIME 1983–2023) and 8 IF prompts (RLVR-IFeval); 8 answers per prompt, up to 6,144 tokens, temperature 1. Every arm sees the same prompt stream per seed. All runs are async lag 1 with truncated importance sampling (cap 2), the recipe the <a href="https://ykirpichev.github.io/async-vs-sync-rl-tpu/">async vs sync study</a> recommended.</li>
-<li><strong>Teachers.</strong> Same-origin specialists trained from the same base with GRPO for 60 steps, 16 prompts per step: T-math on AIME prompts (exact <span class="mono">\boxed{}</span> match reward), T-IF on RLVR-IFeval prompts (verifiable instruction-checker reward).</li>
-<li><strong>Arms</strong> (2 seeds × 60 steps):
+<li><strong>Student and data.</strong> Qwen3.5-2B.
 <ul>
-<li><strong>Mix-RL:</strong> GRPO on the mixed math + IF batches, outcome reward only.</li>
-<li><strong>MOPD:</strong> each answer goes to its domain's teacher; per-token advantage <span class="mono">sg[log π_teacher − log π_student]</span>, clipped at ±5, in the policy-gradient loss with truncated IS. No outcome reward.</li>
-<li><strong>MOPD-dist:</strong> exact reverse KL to the routed teacher over the full vocabulary; the teacher ships its final hidden state and the learner rebuilds logits in chunks of 512 positions.</li>
-<li><strong>OPD from T-math only:</strong> MOPD's loss, but T-math scores every prompt. Isolates the value of routing; replaced the planned OPD-9B.</li>
+<li>Each step samples 8 math prompts (AIME 1983–2023) and 8 IF prompts (RLVR-IFeval).</li>
+<li>Each prompt gets 8 answers of up to 6,144 tokens, at temperature 1.</li>
+<li>Every arm sees the same prompt stream per seed.</li>
+<li>AdamW at a learning rate of 1e-6.</li>
+<li>All runs are async lag 1 with truncated importance sampling (cap 2), the recipe the <a href="https://ykirpichev.github.io/async-vs-sync-rl-tpu/">async vs sync study</a> recommended.</li>
 </ul></li>
-<li><strong>Layout on one v6e-4.</strong> Distillation: chip 0 vLLM generator, chip 1 TorchTPU learner, chip 2 teacher(s), chip 3 step-20/40 evals. Mix-RL: both seeds on one VM, 2 chips each.</li>
-<li><strong>Eval.</strong> AIME pass@1 on the async study's 136-problem set × 16 samples (AIME 2024–2026, BRUMO 2025, HMMT 2025–2026); IFEval strict prompt accuracy (541 × 4); IFBench strict accuracy (300 × 4).</li>
-<li><strong>Statistics.</strong> Hierarchical bootstrap, 10,000 draws: resample problems, then seeds, then redraw each problem's outcomes from a binomial. Differences within a benchmark share problem draws, so they are paired.</li>
-<li><strong>Code.</strong> Branch <span class="mono">cursor/qwen38-async-vs-sync-rl-bc4a</span>, under <span class="mono">rl/qrl/</span> and <span class="mono">rl/tpu/</span>; raw results in <span class="mono">rl/results/mopdpilot/</span> and <span class="mono">rl/results/mopdfull/</span>.</li>
+<li><strong>Teachers.</strong> Same-origin specialists, trained from the same base with GRPO for 60 steps at 16 prompts per step.
+<ul>
+<li>T-math: AIME prompts, exact <span class="mono">\boxed{}</span> match reward.</li>
+<li>T-IF: RLVR-IFeval prompts, verifiable instruction-checker reward.</li>
+</ul></li>
+<li><strong>Arms.</strong>
+<ul>
+<li><strong>MOPD:</strong> each answer goes to its domain's teacher. The per-token advantage is <span class="mono">sg[log π_teacher − log π_student]</span>, clipped at ±5, in the policy-gradient loss with truncated IS. No outcome reward.</li>
+<li><strong>MOPD-dist:</strong> exact reverse KL to the routed teacher over the full vocabulary.</li>
+<li><strong>Mix-RL:</strong> GRPO on the same mixed batches, outcome reward only.</li>
+<li><strong>OPD from T-math only:</strong> MOPD's loss, with T-math scoring every prompt.</li>
+<li><strong>SFT on teacher samples:</strong> the generator samples from the routed teacher, and the learner minimises cross-entropy on those samples. It is evaluated at step 60 (learner tokens matched) and step 120 (VM-hours matched).</li>
+<li><strong>Merges, built on CPU in seconds:</strong> M1 linear average, M2 task arithmetic (λ = 1), M3 TIES at 20% density (pre-registered primary) and M4 TIES at 50%.</li>
+</ul></li>
+<li><strong>Seeds.</strong> Four for MOPD, MOPD-dist and Mix-RL; three for OPD and SFT.</li>
+<li><strong>Eval.</strong> AIME pass@1 on the async study's 136-problem set × 16 samples (AIME 2024–2026, BRUMO 2025, HMMT 2025–2026), IFEval strict prompt accuracy (541 × 4) and IFBench strict accuracy (300 × 4). Non-thinking mode.</li>
+<li><strong>Statistics.</strong>
+<ul>
+<li>Hierarchical bootstrap with 10,000 draws: resample problems, then seeds, then redraw each problem's outcomes from a binomial. Differences are paired by problem.</li>
+<li>TOST equivalence at ±3 pp, with a 90% CI.</li>
+<li>Holm correction over 7 primary contrasts per benchmark.</li>
+<li>A Bayesian mixed GLM as the robustness check.</li>
+</ul></li>
+<li><strong>Code.</strong> <a href="https://github.com/ykirpichev/mopd-tpu/tree/main/rl">rl/ in this repository</a>, Apache-2.0. The training stack is in <span class="mono">rl/qrl/</span>, TPU orchestration in <span class="mono">rl/tpu/</span>, and the plans used are <span class="mono">rl/tpu/mopd{pilot,full,paper}.json</span>.</li>
 </ul>
 </details>
 </section>
 
 <footer class="footer">
-<p>Companion study: <a href="https://ykirpichev.github.io/async-vs-sync-rl-tpu/">Async vs sync RL on TPU v6e</a>. Source: <a href="https://github.com/ykirpichev/mopd-tpu">github.com/ykirpichev/mopd-tpu</a>.</p>
-<p>Engineering study for TPU Builders, not a peer-reviewed paper.</p>
+<p>Paper: <em>When Is On-Policy Distillation Worth It?</em> (Yury Kirpichev, 2026), arXiv link coming. Code: <a href="https://github.com/ykirpichev/mopd-tpu">github.com/ykirpichev/mopd-tpu</a> (Apache-2.0).</p>
+<p>Companion study: <a href="https://ykirpichev.github.io/async-vs-sync-rl-tpu/">Async vs sync RL on TPU v6e</a>.</p>
 </footer>
 </main>
 </body>
